@@ -533,12 +533,11 @@ function BoardView({tasks,columns,labels,getLabelColor,updTask,toggle,delTask,du
   const[sortBy,setSortBy]=useState('default');
   const[groupBy,setGroupBy]=useState('status');
 
-  /* ── date helpers ── */
-  const addD=(base,n)=>{const d=new Date(base+'T00:00:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)};
+  /* ── date helpers (use global addDays = local timezone safe) ── */
   const td=todayStr();
-  const tmr=addD(td,1);
-  const d2=addD(td,2);
-  const d3=addD(td,3);
+  const tmr=addDays(td,1);
+  const d2=addDays(td,2);
+  const d3=addDays(td,3);
 
   /* ── dynamic column generation ── */
   const getDynCols=()=>{
@@ -597,7 +596,7 @@ function BoardView({tasks,columns,labels,getLabelColor,updTask,toggle,delTask,du
       if(col._date==='today')dd=td;
       else if(col._date==='tmr')dd=tmr;
       else if(col._date==='next2')dd=d2;
-      else if(col._date==='later'){const nx=new Date(td+'T00:00:00');nx.setDate(nx.getDate()+8);dd=nx.toISOString().slice(0,10);}
+      else if(col._date==='later')dd=addDays(td,8);
       updTask(dragging,{dueDate:dd});
     }
     setDragging(null);setDragOver(null);
