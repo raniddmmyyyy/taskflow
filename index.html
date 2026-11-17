@@ -280,7 +280,7 @@ function App(){
       <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
         <TopBar view={view} filterLabel={filterLabel} search={search} setSearch={setSearch} openQA={()=>{setQuickIn('');setModal({type:'qa',taskId:null,subId:null})}} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} darkMode={darkMode} toggleDark={()=>setDarkMode(v=>!v)} openSettings={()=>setModal({type:'settings',taskId:null,subId:null})}/>
         <div style={{flex:1,overflowY:'auto',padding:'22px 24px'}}>
-          {view==='help'?<HelpPage/>:view==='board'?<BoardView tasks={visible} columns={columns} getLabelColor={getLabelColor} updTask={updTask} toggle={toggle} delTask={delTask} dupTask={dupTask} openTask={openTask} addTask={addTask} manageColumns={()=>setModal({type:'cols',taskId:null,subId:null})}/>:view==='calendar'?<CalendarView tasks={tasks} getLabelColor={getLabelColor} openTask={openTask} openSub={openSub}/>:<ListView tasks={visible} view={view} labels={labels} getLabelColor={getLabelColor} toggle={toggle} toggleSub={toggleSub} delTask={delTask} dupTask={dupTask} openTask={openTask} openSub={openSub} addTask={addTask} addSub={addSub} autoCreateLabel={autoCreateLabel}/>}
+          {view==='help'?<HelpPage/>:view==='board'?<BoardView tasks={visible} columns={columns} labels={labels} getLabelColor={getLabelColor} updTask={updTask} toggle={toggle} delTask={delTask} dupTask={dupTask} openTask={openTask} addTask={addTask} manageColumns={()=>setModal({type:'cols',taskId:null,subId:null})}/>:view==='calendar'?<CalendarView tasks={tasks} getLabelColor={getLabelColor} openTask={openTask} openSub={openSub}/>:<ListView tasks={visible} view={view} labels={labels} getLabelColor={getLabelColor} toggle={toggle} toggleSub={toggleSub} delTask={delTask} dupTask={dupTask} openTask={openTask} openSub={openSub} addTask={addTask} addSub={addSub} autoCreateLabel={autoCreateLabel}/>}
         </div>
       </div>
 
@@ -525,48 +525,125 @@ function TaskRow({task,getLabelColor,toggle,toggleSub,delTask,dupTask,openTask,o
 }
 
 /*────────── BOARD VIEW ──────────*/
-function BoardView({tasks,columns,getLabelColor,updTask,toggle,delTask,dupTask,openTask,addTask,manageColumns}){
+function BoardView({tasks,columns,labels,getLabelColor,updTask,toggle,delTask,dupTask,openTask,addTask,manageColumns}){
   const[dragging,setDragging]=useState(null);
   const[dragOver,setDragOver]=useState(null);
   const[addIn,setAddIn]=useState(null);
   const[addIn2,setAddIn2]=useState('');
   const[sortBy,setSortBy]=useState('default');
-  const sortedCols=[...columns].sort((a,b)=>a.order-b.order);
-  const getCol=id=>tasks.filter(t=>t.boardColumn===id&&!t.completed);
+  const[groupBy,setGroupBy]=useState('status');
+
+  /* ── date helpers ── */
+  const addD=(base,n)=>{const d=new Date(base+'T00:00:00');d.setDate(d.getDate()+n);return d.toISOString().slice(0,10)};
+  const td=todayStr();
+  const tmr=addD(td,1);
+  const d2=addD(td,2);
+  const d3=addD(td,3);
+
+  /* ── dynamic column generation ── */
+  const getDynCols=()=>{
+    if(groupBy==='status')return[...columns].sort((a,b)=>a.order-b.order);
+    if(groupBy==='label'){
+      const used=new Set();tasks.forEach(t=>t.labels.forEach(l=>used.add(l)));
+      const lCols=labels.filter(l=>used.has(l.name)).map(l=>({id:`lbl_${l.name}`,name:l.name,color:l.color,_lbl:l.name}));
+      return[...lCols,{id:'lbl__none',name:'No Label',color:'#94a3b8',_lbl:null}];
+    }
+    if(groupBy==='date')return[
+      {id:'dt_today',name:'Today',color:'#6366f1',_date:'today'},
+      {id:'dt_tmr',name:'Tomorrow',color:'#10b981',_date:'tmr'},
+      {id:'dt_next2',name:'Next 2 Days',color:'#f59e0b',_date:'next2'},
+      {id:'dt_later',name:'Later',color:'#8b5cf6',_date:'later'},
+      {id:'dt_none',name:'No Date',color:'#94a3b8',_date:'none'},
+    ];
+    return[...columns].sort((a,b)=>a.order-b.order);
+  };
+  const dynCols=getDynCols();
+
+  /* ── get tasks per column ── */
+  const getColTasks=col=>{
+    const list=tasks.filter(t=>!t.completed);
+    if(groupBy==='status')return list.filter(t=>t.boardColumn===col.id);
+    if(groupBy==='label'){
+      if(col._lbl===null)return list.filter(t=>!t.labels||t.labels.length===0);
+      return list.filter(t=>t.labels&&t.labels.includes(col._lbl));
+    }
+    if(groupBy==='date'){
+      if(col._date==='today')return list.filter(t=>t.dueDate===td);
+      if(col._date==='tmr')return list.filter(t=>t.dueDate===tmr);
+      if(col._date==='next2')return list.filter(t=>t.dueDate===d2||t.dueDate===d3);
+      if(col._date==='later')return list.filter(t=>t.dueDate&&t.dueDate>d3);
+      return list.filter(t=>!t.dueDate);
+    }
+    return list;
+  };
+
   const sortTasks=list=>{
     if(sortBy==='priority'){const p={high:0,medium:1,low:2};return[...list].sort((a,b)=>(p[a.priority]??3)-(p[b.priority]??3))}
     if(sortBy==='label')return[...list].sort((a,b)=>(a.labels[0]||'').localeCompare(b.labels[0]||''));
     if(sortBy==='timeline')return[...list].sort((a,b)=>{if(!a.dueDate)return 1;if(!b.dueDate)return-1;return a.dueDate.localeCompare(b.dueDate)});
     return list;
   };
-  const handleDrop=colId=>{
+
+  /* ── drag & drop ── */
+  const handleDrop=col=>{
     if(!dragging)return;
-    updTask(dragging,{boardColumn:colId,completed:colId==='done',completedAt:colId==='done'?new Date().toISOString():null});
+    if(groupBy==='status'){
+      updTask(dragging,{boardColumn:col.id,completed:col.id==='done',completedAt:col.id==='done'?new Date().toISOString():null});
+    } else if(groupBy==='label'){
+      if(col._lbl===null){updTask(dragging,{labels:[]});}
+      else{const t=tasks.find(x=>x.id===dragging);if(t)updTask(dragging,{labels:[col._lbl,...(t.labels||[]).filter(l=>l!==col._lbl)]});}
+    } else if(groupBy==='date'){
+      let dd=null;
+      if(col._date==='today')dd=td;
+      else if(col._date==='tmr')dd=tmr;
+      else if(col._date==='next2')dd=d2;
+      else if(col._date==='later'){const nx=new Date(td+'T00:00:00');nx.setDate(nx.getDate()+8);dd=nx.toISOString().slice(0,10);}
+      updTask(dragging,{dueDate:dd});
+    }
     setDragging(null);setDragOver(null);
   };
-  const handleColAdd=colId=>{
+
+  /* ── inline add ── */
+  const handleColAdd=col=>{
     if(!addIn2.trim())return;
     const p=parseInput(addIn2);if(!p.title)return;
-    addTask({...p,boardColumn:colId});setAddIn2('');setAddIn(null);
+    const extra={};
+    if(groupBy==='status')extra.boardColumn=col.id;
+    else if(groupBy==='label'&&col._lbl)extra.labels=[col._lbl];
+    else if(groupBy==='date'){
+      if(col._date==='today')extra.dueDate=td;
+      else if(col._date==='tmr')extra.dueDate=tmr;
+      else if(col._date==='next2')extra.dueDate=d2;
+    }
+    addTask({...p,...extra});setAddIn2('');setAddIn(null);
   };
+
   const pBg={high:'var(--p-high)',medium:'var(--p-med)',low:'var(--p-low)'};
+  const selSt={fontSize:11,border:'1px solid var(--border)',borderRadius:7,padding:'5px 10px',background:'var(--surface)',color:'var(--text-muted)',outline:'none',cursor:'pointer',fontFamily:'inherit'};
+
   return(
     <div>
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
-        <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={{fontSize:11,border:'1px solid var(--border)',borderRadius:7,padding:'5px 10px',background:'var(--surface)',color:'var(--text-muted)',outline:'none',cursor:'pointer',fontFamily:'inherit'}}>
-          <option value="default">Default order</option><option value="priority">Sort: Priority</option><option value="label">Sort: Label</option><option value="timeline">Sort: Timeline</option>
+        <select value={groupBy} onChange={e=>{setGroupBy(e.target.value);setAddIn(null);}} style={selSt}>
+          <option value="status">Group: Status</option>
+          <option value="label">Group: Label</option>
+          <option value="date">Group: Date</option>
         </select>
-        <button onClick={manageColumns} style={{background:'none',border:'1px solid var(--border)',borderRadius:7,padding:'5px 12px',fontSize:11,cursor:'pointer',color:'var(--text-muted)',fontFamily:'inherit'}}>⚙ Manage Columns</button>
+        <select value={sortBy} onChange={e=>setSortBy(e.target.value)} style={selSt}>
+          <option value="default">Sort: Default</option><option value="priority">Sort: Priority</option><option value="label">Sort: Label</option><option value="timeline">Sort: Timeline</option>
+        </select>
+        {groupBy==='status'&&<button onClick={manageColumns} style={{background:'none',border:'1px solid var(--border)',borderRadius:7,padding:'5px 12px',fontSize:11,cursor:'pointer',color:'var(--text-muted)',fontFamily:'inherit'}}>⚙ Manage Columns</button>}
       </div>
       <div style={{display:'flex',gap:14,height:'calc(100vh - 160px)',overflowX:'auto',paddingBottom:16,alignItems:'flex-start'}}>
-        {sortedCols.map(col=>{
-          const colT=sortTasks(getCol(col.id));
+        {dynCols.map(col=>{
+          const colT=sortTasks(getColTasks(col));
           const over=dragOver===col.id;
           return(
-            <div key={col.id} onDragOver={e=>{e.preventDefault();setDragOver(col.id)}} onDragLeave={()=>setDragOver(null)} onDrop={()=>handleDrop(col.id)} style={{minWidth:270,flex:1,maxWidth:340,background:over?'var(--accent-light)':'var(--surface2)',borderRadius:12,padding:13,display:'flex',flexDirection:'column',border:over?'2px dashed var(--accent)':'2px solid transparent',transition:'all .15s'}}>
+            <div key={col.id} onDragOver={e=>{e.preventDefault();setDragOver(col.id)}} onDragLeave={()=>setDragOver(null)} onDrop={()=>handleDrop(col)} style={{minWidth:270,flex:1,maxWidth:340,background:over?'var(--accent-light)':'var(--surface2)',borderRadius:12,padding:13,display:'flex',flexDirection:'column',border:over?'2px dashed var(--accent)':'2px solid transparent',transition:'all .15s'}}>
               <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:12}}>
-                <span style={{width:11,height:11,borderRadius:'50%',background:col.color}}></span>
+                <span style={{width:11,height:11,borderRadius:'50%',background:col.color,flexShrink:0}}></span>
                 <span style={{fontWeight:600,fontSize:12,color:'var(--text)'}}>{col.name}</span>
+                {groupBy==='date'&&col._date==='today'&&<span style={{fontSize:9,background:'var(--accent)',color:'white',borderRadius:10,padding:'1px 6px',fontWeight:600}}>TODAY</span>}
                 <span style={{marginLeft:'auto',fontSize:10,color:'var(--text-faint)',background:'var(--surface)',borderRadius:12,padding:'2px 7px'}}>{colT.length}</span>
               </div>
               <div style={{flex:1,display:'flex',flexDirection:'column',gap:8,minHeight:80,overflowY:'auto',maxHeight:'calc(100vh - 260px)'}}>
@@ -588,9 +665,9 @@ function BoardView({tasks,columns,getLabelColor,updTask,toggle,delTask,dupTask,o
               </div>
               {addIn===col.id?(
                 <div style={{marginTop:8}}>
-                  <input autoFocus className="inp" style={{width:'100%',boxSizing:'border-box',marginBottom:6,fontSize:12}} placeholder="Task name… (#Label !High tmr)" value={addIn2} onChange={e=>setAddIn2(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')handleColAdd(col.id);if(e.key==='Escape'){setAddIn(null);setAddIn2('')}}}/>
+                  <input autoFocus className="inp" style={{width:'100%',boxSizing:'border-box',marginBottom:6,fontSize:12}} placeholder="Task name… (#Label !High tmr)" value={addIn2} onChange={e=>setAddIn2(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')handleColAdd(col);if(e.key==='Escape'){setAddIn(null);setAddIn2('')}}}/>
                   <div style={{display:'flex',gap:6}}>
-                    <button onClick={()=>handleColAdd(col.id)} style={{flex:1,background:'var(--accent)',color:'white',border:'none',borderRadius:6,padding:'6px 0',fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>Add</button>
+                    <button onClick={()=>handleColAdd(col)} style={{flex:1,background:'var(--accent)',color:'white',border:'none',borderRadius:6,padding:'6px 0',fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>Add</button>
                     <button onClick={()=>{setAddIn(null);setAddIn2('')}} style={{flex:1,background:'var(--border)',border:'none',borderRadius:6,padding:'6px 0',fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>Cancel</button>
                   </div>
                 </div>
